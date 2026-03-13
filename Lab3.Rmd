@@ -1,0 +1,31 @@
+---
+title: "Lab 3"
+author: |
+  Grupo \#8  
+  Osman Emanuel de León García - 23428  
+  María José Yee Vidal - 231193  
+  Andrés Rafael Chivalán Marroquín - 21534
+
+date: "2026-03-13"
+output: 
+  pdf_document: default
+header-includes:
+  - \usepackage{graphicx}
+  - \usepackage{titling}
+  - \pretitle{\begin{center}\includegraphics[width=3in,height=5in]{Uvg_logo.jpg}\LARGE\\}
+  - \posttitle{\end{center}}
+---
+\newpage
+
+```{r setup, message=FALSE, warning=FALSE}
+library(dplyr)
+library(tidyr)
+library(Matrix)
+library(ggplot2)
+library(Rtsne)
+library(umap)
+library(edfReader)
+library(fastICA)
+
+load("listings.RData")
+```
