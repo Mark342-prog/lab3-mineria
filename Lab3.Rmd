@@ -82,3 +82,13 @@ ggplot(listings, aes(y = price)) +
 ggplot(listings, aes(x = bedrooms)) +
   geom_histogram()
 ```
+
+### Interpretación de las gráficas
+
+El histograma de la variable bedrooms muestra que la mayoría de los alojamientos tienen entre 1 y 3 habitaciones, mientras que los alojamientos con un mayor número de habitaciones son mucho menos frecuentes. Además, se observan algunos valores extremos con un número muy alto de habitaciones, lo cual podría corresponder a hoteles o registros atípicos.
+
+El boxplot de la variable price evidencia la presencia de numerosos valores atípicos, con algunos alojamientos que presentan precios extremadamente altos. Esto provoca que la mayor parte de los valores se concentre en la parte inferior de la gráfica.
+
+Por otra parte, el histograma del price muestra una distribución fuertemente sesgada hacia la derecha, lo que indica que la mayoría de los alojamientos tienen precios relativamente bajos, mientras que solo unos pocos presentan precios muy elevados.
+
+En general, los resultados sugieren que el conjunto de datos contiene principalmente alojamientos pequeños y que el precio presenta una alta variabilidad con presencia de valores extremos.
