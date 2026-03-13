@@ -27,5 +27,58 @@ library(umap)
 library(edfReader)
 library(fastICA)
 
-load("listings.RData")
+```
+
+## Descripción de las variables
+
+El conjunto de datos contiene 171,748 observaciones de alojamientos con múltiples variables que describen características del anuncio, del anfitrión, de la ubicación y de las evaluaciones de los usuarios.
+
+Las variables pueden agruparse en las siguientes categorías:
+
+Variables de identificación:
+Incluyen identificadores únicos del alojamiento o del proceso de recolección de datos, como id, listing_url y scrape_id.
+
+Variables descriptivas del anuncio:
+Contienen información textual sobre el alojamiento, por ejemplo name, description, neighborhood_overview y amenities.
+
+Variables del anfitrión:
+Describen características del host, como host_since, host_location, host_is_superhost, host_listings_count y host_identity_verified.
+
+Variables de localización:
+Indican la ubicación geográfica del alojamiento mediante latitude, longitude, city y neighbourhood.
+
+Características del alojamiento:
+Describen propiedades físicas del inmueble, incluyendo property_type, room_type, accommodates, bathrooms, bedrooms y beds.
+
+Disponibilidad:
+Variables como availability_30, availability_60, availability_90 y availability_365 indican la cantidad de días disponibles para reservar.
+
+Evaluaciones y reseñas:
+Incluyen variables como number_of_reviews, review_scores_rating, review_scores_cleanliness y reviews_per_month.
+
+Variable respuesta:
+La variable price representa el precio por noche del alojamiento, y será utilizada como variable objetivo para el análisis.
+
+
+```{r 1}
+load("data/listings.RData")
+summary(listings)
+listings$price <- as.numeric(gsub("[$,]", "", listings$price))
+```
+
+### Algunas graficas
+
+```{r 2}
+ggplot(listings, aes(x = price)) +
+  geom_histogram(bins = 50)
+```
+
+```{r 3}
+ggplot(listings, aes(y = price)) +
+  geom_boxplot()
+```
+
+```{r 4}
+ggplot(listings, aes(x = bedrooms)) +
+  geom_histogram()
 ```
