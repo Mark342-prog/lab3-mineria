@@ -1,264 +1,811 @@
 ---
 title: "Lab 3"
-author: |
-  Grupo \#8  
-  Osman Emanuel de León García - 23428  
-  María José Yee Vidal - 231193  
-  Andrés Rafael Chivalán Marroquín - 21534
-
+author: "Grupo \\#8  \nOsman Emanuel de León García - 23428  \nMaría José Yee Vidal
+  - 231193  \nAndrés Rafael Chivalán Marroquín - 21534\n"
 date: "2026-03-13"
-output: 
-  pdf_document: default
-header-includes:
-  - \usepackage{graphicx}
-  - \usepackage{titling}
-  - \pretitle{\begin{center}\includegraphics[width=3in,height=5in]{Uvg_logo.jpg}\LARGE\\}
-  - \posttitle{\end{center}}
+output:
+  pdf_document:
+    latex_engine: xelatex
+  html_document:
+    df_print: paged
+header-includes: \usepackage{graphicx}
 ---
+
+\begin{center}
+\includegraphics[width=2.5in]{Uvg_logo.jpg}
+\end{center}
+
 \newpage
 
-# para que los paquetes se instalen solo si faltan
-
 ```{r setup, message=FALSE, warning=FALSE}
-required_packages <- c("dplyr","tidyr","Matrix","ggplot2","corrplot","car")
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(corrplot)
+library(cluster)
+library(factoextra)
+library(glmnet)
+library(caret)
+library(car)
+library(nortest)
 
-for(p in required_packages){
-  if(!require(p, character.only = TRUE)){
-    install.packages(p)
-    library(p, character.only = TRUE)
-  }
-}
+set.seed(42)
 ```
 
-## Descripción de las variables
+\newpage
 
-El conjunto de datos contiene 171,748 observaciones de alojamientos con múltiples variables que describen características del anuncio, del anfitrión, de la ubicación y de las evaluaciones de los usuarios.
+# 1. Descripción de las variables
 
-Las variables pueden agruparse en las siguientes categorías:
+El conjunto de datos contiene **171,748 observaciones** de alojamientos de Airbnb con múltiples variables que describen características del anuncio, del anfitrión, de la ubicación y de las evaluaciones de los usuarios.
 
-Variables de identificación:
-Incluyen identificadores únicos del alojamiento o del proceso de recolección de datos, como id, listing_url y scrape_id.
+Las variables se agrupan en las siguientes categorías:
 
-Variables descriptivas del anuncio:
-Contienen información textual sobre el alojamiento, por ejemplo name, description, neighborhood_overview y amenities.
+**Variables de identificación:** Identificadores únicos del alojamiento o del proceso de recolección de datos, como `id`, `listing_url` y `scrape_id`. Estas variables no aportan información predictiva y serán excluidas del análisis.
 
-Variables del anfitrión:
-Describen características del host, como host_since, host_location, host_is_superhost, host_listings_count y host_identity_verified.
+**Variables descriptivas del anuncio:** Información textual sobre el alojamiento: `name`, `description`, `neighborhood_overview` y `amenities`. Al ser texto libre, no se utilizarán directamente como predictores numéricos.
 
-Variables de localización:
-Indican la ubicación geográfica del alojamiento mediante latitude, longitude, city y neighbourhood.
+**Variables del anfitrión:** Describen características del host: `host_since`, `host_is_superhost`, `host_listings_count`, `host_identity_verified`. Algunas pueden ser relevantes como proxies de calidad.
 
-Características del alojamiento:
-Describen propiedades físicas del inmueble, incluyendo property_type, room_type, accommodates, bathrooms, bedrooms y beds.
+**Variables de localización:** Indican la ubicación geográfica mediante `latitude`, `longitude`, `city` y `neighbourhood`. La localización influye directamente en el precio.
 
-Disponibilidad:
-Variables como availability_30, availability_60, availability_90 y availability_365 indican la cantidad de días disponibles para reservar.
+**Características del alojamiento:** Propiedades físicas del inmueble: `property_type`, `room_type`, `accommodates`, `bathrooms`, `bedrooms` y `beds`. Son predictores clave del precio.
 
-Evaluaciones y reseñas:
-Incluyen variables como number_of_reviews, review_scores_rating, review_scores_cleanliness y reviews_per_month.
+**Disponibilidad:** `availability_30`, `availability_60`, `availability_90` y `availability_365` indican días disponibles para reservar. Alta disponibilidad puede indicar menor demanda.
 
-Variable respuesta:
-La variable price representa el precio por noche del alojamiento, y será utilizada como variable objetivo para el análisis.
+**Evaluaciones y reseñas:** `number_of_reviews`, `review_scores_rating`, `review_scores_cleanliness`, `reviews_per_month`. Reflejan la percepción de calidad del alojamiento.
 
+**Variable respuesta:** `price` — precio por noche del alojamiento en dólares. Es la variable objetivo de todos los modelos.
 
-```{r 1}
+\newpage
+
+# 2. Análisis Exploratorio de Datos (EDA)
+
+## 2.1 Carga y preprocesamiento inicial
+
+```{r carga, message=FALSE, warning=FALSE}
 load("data/listings.RData")
-summary(listings)
+
+# Convertir price de string "$123.00" a numérico
 listings$price <- as.numeric(gsub("[$,]", "", listings$price))
+
+# Verificar dimensiones
+cat("Dimensiones originales:", nrow(listings), "filas x", ncol(listings), "columnas\n")
+
+# Resumen de NAs por columna (solo columnas con NAs)
+na_summary <- data.frame(
+  variable = names(listings),
+  n_na = colSums(is.na(listings)),
+  pct_na = round(colSums(is.na(listings)) / nrow(listings) * 100, 1)
+) %>% filter(n_na > 0) %>% arrange(desc(pct_na))
+
+print(na_summary)
 ```
 
-### 1. ANÁLISIS EXPLORATORIO DE DATOS (EDA)
-##  Distribuciones de variables
+**Hallazgo clave sobre los datos faltantes:** La variable `price` tiene 95,502 valores NA (55.6% del dataset). Esto indica que más de la mitad de los listados no tienen precio registrado, posiblemente porque no están activos. La variable `estimated_occupancy_l365d` y `estimated_revenue_l365d` también presentan el mismo patrón de NAs, lo que sugiere que son los mismos registros sin actividad. Las variables de reseñas (`review_scores_*`) tienen alrededor de 23% de NAs, correspondientes a alojamientos sin reviews.
 
-Durante la exploración inicial se observó que una gran cantidad de registros presentan valores faltantes en la variable precio, los cuales fueron ignorados en las visualizaciones, y posteriormente eliminados durante la fase de preparación de los datos para el modelado
+## 2.2 Limpieza y filtrado del dataset
 
-# 1.1 Distribución de la variable precio
+```{r limpieza, message=FALSE, warning=FALSE}
+# Seleccionar variables numéricas relevantes y eliminar NAs en price
+listings_clean <- listings %>%
+  filter(!is.na(price), price > 0) %>%
+  select(
+    price,
+    accommodates,
+    bathrooms,
+    bedrooms,
+    beds,
+    minimum_nights,
+    maximum_nights,
+    availability_30,
+    availability_60,
+    availability_90,
+    availability_365,
+    number_of_reviews,
+    number_of_reviews_ltm,
+    review_scores_rating,
+    review_scores_cleanliness,
+    review_scores_checkin,
+    review_scores_communication,
+    review_scores_location,
+    review_scores_value,
+    reviews_per_month,
+    calculated_host_listings_count,
+    host_listings_count,
+    latitude,
+    longitude
+  ) %>%
+  filter(!is.na(bedrooms), !is.na(bathrooms), !is.na(beds))
 
-```{r 2}
-ggplot(listings, aes(x = price)) +
-  geom_histogram(bins = 50)
-```
-# Distribución de habitaciones
+cat("Filas después de limpieza básica:", nrow(listings_clean), "\n")
 
-```{r 3}
-ggplot(listings, aes(y = price)) +
-  geom_boxplot()
-```
+# Eliminar outliers extremos de price usando IQR
+Q1 <- quantile(listings_clean$price, 0.25)
+Q3 <- quantile(listings_clean$price, 0.75)
+IQR_val <- Q3 - Q1
+limite_sup <- Q3 + 3 * IQR_val
 
-# Presencia de outliers
+listings_clean <- listings_clean %>%
+  filter(price <= limite_sup)
 
-```{r 4}
-ggplot(listings, aes(x = bedrooms)) +
-  geom_histogram()
-```
-
-### Interpretación de las gráficas
-
-El histograma de la variable bedrooms muestra que la mayoría de los alojamientos tienen entre 1 y 3 habitaciones, mientras que los alojamientos con un mayor número de habitaciones son mucho menos frecuentes. Además, se observan algunos valores extremos con un número muy alto de habitaciones, lo cual podría corresponder a hoteles o registros atípicos.
-
-El boxplot de la variable price evidencia la presencia de numerosos valores atípicos, con algunos alojamientos que presentan precios extremadamente altos. Esto provoca que la mayor parte de los valores se concentre en la parte inferior de la gráfica.
-
-Por otra parte, el histograma del price muestra una distribución fuertemente sesgada hacia la derecha, lo que indica que la mayoría de los alojamientos tienen precios relativamente bajos, mientras que solo unos pocos presentan precios muy elevados.
-
-En general, los resultados sugieren que el conjunto de datos contiene principalmente alojamientos pequeños y que el precio presenta una alta variabilidad con presencia de valores extremos.
-
-
-
-# Análisis de relaciones con la variable precio
-
-```{r}
-ggplot(listings, aes(x = bedrooms, y = price)) +
-  geom_point(alpha = 0.3) +
-  geom_smooth(method = "lm")
-```
-
-```{r}
-ggplot(listings, aes(x = accommodates, y = price)) +
-  geom_point(alpha = 0.3) +
-  geom_smooth(method = "lm")
-```
-
-```{r}
-ggplot(listings, aes(x = bathrooms, y = price)) +
-  geom_point(alpha = 0.3) +
-  geom_smooth(method = "lm")
+cat("Filas después de remover outliers extremos de price:", nrow(listings_clean), "\n")
+cat("Rango de price después de limpieza: $", min(listings_clean$price), 
+    "- $", max(listings_clean$price), "\n")
 ```
 
-```{r}
-ggplot(listings, aes(x = room_type, y = price)) +
-  geom_boxplot()
+**Decisión de preprocesamiento:** Se eliminaron los registros con `price = NA` o `price = 0`, ya que no representan alojamientos activos. Para los outliers de precio se utilizó el criterio de 3xIQR (más conservador que el estándar de 1.5xIQR), dado que en Airbnb sí existen propiedades de lujo con precios legítimamente altos. Esto preserva más variabilidad en los datos.
+
+## 2.3 Distribución de la variable respuesta: price
+
+```{r dist_price, message=FALSE, warning=FALSE}
+# Histograma de price
+ggplot(listings_clean, aes(x = price)) +
+  geom_histogram(bins = 60, fill = "#2C7BB6", color = "white", alpha = 0.8) +
+  labs(
+    title = "Distribución del precio por noche",
+    x = "Precio (USD)",
+    y = "Frecuencia"
+  ) +
+  theme_minimal()
 ```
 
+```{r dist_price_log, message=FALSE, warning=FALSE}
+# Histograma de log(price) para ver distribución normalizada
+listings_clean$log_price <- log(listings_clean$price)
 
-# Matriz de correlación entre variables numéricas
+ggplot(listings_clean, aes(x = log_price)) +
+  geom_histogram(bins = 60, fill = "#D7191C", color = "white", alpha = 0.8) +
+  labs(
+    title = "Distribución de log(precio) por noche",
+    x = "log(Precio)",
+    y = "Frecuencia"
+  ) +
+  theme_minimal()
+```
 
-```{r}
-numeric_vars <- listings %>%
-  select(price,
-         bedrooms,
-         bathrooms,
-         accommodates,
-         beds,
-         number_of_reviews,
-         review_scores_rating,
-         reviews_per_month) %>%
+**Interpretación:** La distribución original de `price` presenta un sesgo muy pronunciado hacia la derecha, con la gran mayoría de propiedades concentradas en precios bajos y una cola larga de precios altos. Al aplicar la transformación logarítmica, la distribución se aproxima considerablemente a una forma normal, lo cual es más adecuado para construir modelos de regresión lineal que asumen normalidad de los residuos. Por esto, se utilizará `log_price` como variable respuesta en los modelos.
+
+## 2.4 Prueba de normalidad
+
+```{r normalidad, message=FALSE, warning=FALSE}
+# Prueba de normalidad con muestra (Shapiro-Wilk requiere n < 5000)
+muestra_norm <- sample(listings_clean$price, 2000)
+muestra_log <- sample(listings_clean$log_price, 2000)
+
+sw_price <- shapiro.test(muestra_norm)
+sw_log   <- shapiro.test(muestra_log)
+
+cat("Shapiro-Wilk sobre price:\n")
+cat("  W =", sw_price$statistic, " | p-value =", sw_price$p.value, "\n\n")
+
+cat("Shapiro-Wilk sobre log(price):\n")
+cat("  W =", sw_log$statistic, " | p-value =", sw_log$p.value, "\n")
+```
+
+**Interpretación:** Aunque el test de Shapiro-Wilk rechaza la normalidad en ambos casos (lo cual es esperado con muestras grandes), el estadístico W de `log(price)` es considerablemente más cercano a 1 que el de `price`, confirmando que la transformación logarítmica mejora sustancialmente la aproximación a la normalidad. Para fines prácticos del modelado, `log_price` es la elección adecuada.
+
+## 2.5 Distribución de variables categóricas clave
+
+```{r vars_cat, message=FALSE, warning=FALSE}
+# Room type en el dataset original
+listings_room <- listings %>%
+  filter(!is.na(price), !is.na(room_type)) %>%
+  mutate(price = as.numeric(gsub("[$,]", "", price))) %>%
+  filter(!is.na(price), price > 0)
+
+ggplot(listings_room, aes(x = reorder(room_type, -table(room_type)[room_type]),
+                          fill = room_type)) +
+  geom_bar() +
+  labs(
+    title = "Distribución por tipo de habitación",
+    x = "Tipo de habitación",
+    y = "Cantidad de listados",
+    fill = "Tipo"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+```
+
+```{r price_por_roomtype, message=FALSE, warning=FALSE}
+# Precio mediano por tipo de habitación
+ggplot(listings_room %>% filter(price <= quantile(price, 0.95, na.rm=TRUE)), 
+       aes(x = room_type, y = price, fill = room_type)) +
+  geom_boxplot(outlier.size = 0.5, alpha = 0.8) +
+  labs(
+    title = "Distribución de precio por tipo de habitación",
+    x = "Tipo de habitación",
+    y = "Precio (USD)"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 30, hjust = 1))
+```
+
+**Interpretación:** El tipo de alojamiento más común es "Entire home/apt" (casa o apartamento completo), seguido de "Private room". Las habitaciones compartidas y los hoteles representan una minoría. En términos de precio, las propiedades enteras tienen un precio mediano significativamente mayor que las habitaciones privadas y compartidas, lo cual tiene sentido lógico. Esta variable será importante para el modelo.
+
+## 2.6 Distribución de variables numéricas clave
+
+```{r vars_num, message=FALSE, warning=FALSE}
+# Histogramas de principales variables numéricas
+par(mfrow = c(2, 3))
+
+hist(listings_clean$accommodates, main = "Capacidad (accommodates)", 
+     xlab = "Personas", col = "#2C7BB6", border = "white")
+hist(listings_clean$bedrooms, main = "Dormitorios (bedrooms)", 
+     xlab = "Cantidad", col = "#1A9641", border = "white")
+hist(listings_clean$bathrooms, main = "Baños (bathrooms)", 
+     xlab = "Cantidad", col = "#D7191C", border = "white")
+hist(listings_clean$beds, main = "Camas (beds)", 
+     xlab = "Cantidad", col = "#FDAE61", border = "white")
+hist(listings_clean$number_of_reviews, main = "Número de reseñas", 
+     xlab = "Cantidad", col = "#7B2D8B", border = "white")
+hist(listings_clean$availability_365, main = "Disponibilidad (365 días)", 
+     xlab = "Días", col = "#4DAC26", border = "white")
+
+par(mfrow = c(1, 1))
+```
+
+**Interpretación:** La mayoría de las propiedades acomodan entre 2 y 4 personas, tienen 1-2 dormitorios y 1-2 camas. La disponibilidad anual muestra una distribución bimodal: muchos alojamientos tienen disponibilidad muy baja (casi siempre ocupados) o muy alta (casi nunca reservados), lo que podría ser un indicador indirecto de demanda y precio. El número de reseñas también está fuertemente sesgado, con la mayoría de propiedades teniendo pocas reseñas.
+
+## 2.7 Análisis de correlación
+
+```{r correlacion, message=FALSE, warning=FALSE}
+# Seleccionar solo variables numéricas para correlación
+vars_corr <- listings_clean %>%
+  select(-log_price) %>%
+  select(where(is.numeric)) %>%
+  select(price, accommodates, bedrooms, bathrooms, beds,
+         minimum_nights, availability_365, number_of_reviews,
+         review_scores_rating, review_scores_cleanliness,
+         review_scores_value, reviews_per_month,
+         calculated_host_listings_count) %>%
   na.omit()
 
-cor_matrix <- cor(numeric_vars)
+mat_corr <- cor(vars_corr)
 
-corrplot(cor_matrix, method = "color")
+corrplot(mat_corr,
+         method = "color",
+         type = "upper",
+         tl.cex = 0.7,
+         tl.col = "black",
+         addCoef.col = "black",
+         number.cex = 0.6,
+         title = "Matriz de correlación",
+         mar = c(0, 0, 2, 0))
 ```
 
+```{r corr_con_price, message=FALSE, warning=FALSE}
+# Correlación específica de cada variable con price
+corr_price <- sort(mat_corr["price", ], decreasing = TRUE)
+corr_df <- data.frame(
+  variable = names(corr_price),
+  correlacion = as.numeric(corr_price)
+) %>% filter(variable != "price")
 
-# Preparación de los datos para modelado
+ggplot(corr_df, aes(x = reorder(variable, correlacion), y = correlacion,
+                    fill = correlacion > 0)) +
+  geom_col() +
+  coord_flip() +
+  scale_fill_manual(values = c("#D7191C", "#2C7BB6"),
+                    labels = c("Negativa", "Positiva")) +
+  labs(
+    title = "Correlación de cada variable con price",
+    x = "Variable",
+    y = "Coeficiente de correlación",
+    fill = "Dirección"
+  ) +
+  theme_minimal()
+```
 
-```{r}
-model_data <- listings %>%
-  select(price,
-         bedrooms,
-         bathrooms,
-         accommodates,
-         beds,
-         number_of_reviews,
-         review_scores_rating,
-         reviews_per_month) %>%
+**Interpretación:** Las variables con mayor correlación positiva con `price` son `accommodates`, `bedrooms`, `beds` y `bathrooms`, lo que confirma la intuición de que propiedades más grandes tienden a ser más caras. Existe multicolinealidad evidente entre estas cuatro variables (todas miden "tamaño" de la propiedad). Las variables de disponibilidad y reseñas tienen correlaciones débiles con el precio. Esta información guiará la selección de variables para los modelos.
+
+\newpage
+
+# 3. Análisis de Grupos (Clustering K-means)
+
+## 3.1 Preparación de datos para clustering
+
+```{r clustering_prep, message=FALSE, warning=FALSE}
+# Seleccionar variables representativas para clustering
+vars_cluster <- listings_clean %>%
+  select(log_price, accommodates, bedrooms, bathrooms, 
+         availability_365, number_of_reviews, review_scores_rating) %>%
+  na.omit() %>%
+  scale() %>%
+  as.data.frame()
+
+# Muestra para eficiencia computacional (dataset muy grande)
+set.seed(42)
+idx_muestra <- sample(1:nrow(vars_cluster), 5000)
+vars_cluster_muestra <- vars_cluster[idx_muestra, ]
+
+cat("Tamaño de muestra para clustering:", nrow(vars_cluster_muestra), "\n")
+```
+
+## 3.2 Determinación del número óptimo de clusters (Método del Codo)
+
+```{r elbow, message=FALSE, warning=FALSE}
+# Método del codo
+set.seed(42)
+wss <- sapply(1:10, function(k) {
+  kmeans(vars_cluster_muestra, centers = k, nstart = 10, iter.max = 50)$tot.withinss
+})
+
+elbow_df <- data.frame(k = 1:10, wss = wss)
+
+ggplot(elbow_df, aes(x = k, y = wss)) +
+  geom_line(color = "#2C7BB6", size = 1) +
+  geom_point(color = "#D7191C", size = 3) +
+  scale_x_continuous(breaks = 1:10) +
+  labs(
+    title = "Método del Codo para K-means",
+    x = "Número de clusters (k)",
+    y = "Suma de cuadrados intra-cluster (WSS)"
+  ) +
+  theme_minimal()
+```
+
+**Interpretación:** El gráfico del codo muestra que la reducción en WSS se estabiliza a partir de k=4, sugiriendo que 4 clusters es una elección razonable que equilibra simplicidad e interpretabilidad.
+
+## 3.3 Aplicación de K-means con k=4
+
+```{r kmeans, message=FALSE, warning=FALSE}
+set.seed(42)
+km <- kmeans(vars_cluster_muestra, centers = 4, nstart = 25, iter.max = 100)
+
+# Agregar cluster al subset
+vars_cluster_muestra$cluster <- as.factor(km$cluster)
+
+cat("Distribución de observaciones por cluster:\n")
+print(table(km$cluster))
+```
+
+## 3.4 Visualización de clusters
+
+```{r cluster_viz, message=FALSE, warning=FALSE}
+fviz_cluster(km, data = vars_cluster_muestra[, -ncol(vars_cluster_muestra)],
+             geom = "point",
+             ellipse.type = "convex",
+             palette = c("#2C7BB6", "#D7191C", "#1A9641", "#FDAE61"),
+             ggtheme = theme_minimal(),
+             main = "Visualización de clusters K-means (k=4)")
+```
+
+## 3.5 Caracterización de los clusters
+
+```{r cluster_perfil, message=FALSE, warning=FALSE}
+# Reconectar índice con datos originales
+listings_cluster_sub <- listings_clean %>%
+  select(log_price, accommodates, bedrooms, bathrooms,
+         availability_365, number_of_reviews, review_scores_rating) %>%
   na.omit()
+
+listings_cluster_sub <- listings_cluster_sub[idx_muestra, ]
+listings_cluster_sub$cluster <- as.factor(km$cluster)
+
+# Perfil promedio por cluster (en escala original)
+perfil_clusters <- listings_cluster_sub %>%
+  group_by(cluster) %>%
+  summarise(
+    precio_mediano   = round(median(exp(log_price)), 1),
+    capacidad_media  = round(mean(accommodates), 1),
+    dormitorios_med  = round(mean(bedrooms), 1),
+    banos_med        = round(mean(bathrooms), 1),
+    disponib_365     = round(mean(availability_365), 1),
+    num_resenas      = round(mean(number_of_reviews), 1),
+    rating_medio     = round(mean(review_scores_rating, na.rm=TRUE), 2),
+    n                = n()
+  )
+
+print(perfil_clusters)
 ```
 
-
-# División del conjunto de datos (Entrenamiento y prueba)
-
-```{r}
-set.seed(123)
-
-train_index <- sample(seq_len(nrow(model_data)),
-                      size = 0.8 * nrow(model_data))
-
-train <- model_data[train_index, ]
-test <- model_data[-train_index, ]
-
-nrow(train)
-nrow(test)
+```{r cluster_boxplot, message=FALSE, warning=FALSE}
+ggplot(listings_cluster_sub, aes(x = cluster, y = exp(log_price), fill = cluster)) +
+  geom_boxplot(outlier.size = 0.5, alpha = 0.8) +
+  scale_fill_manual(values = c("#2C7BB6", "#D7191C", "#1A9641", "#FDAE61")) +
+  labs(
+    title = "Distribución de precio por cluster",
+    x = "Cluster",
+    y = "Precio (USD)",
+    fill = "Cluster"
+  ) +
+  theme_minimal()
 ```
 
+**Interpretación de los clusters:**
 
-# Modelo de regresión lineal simple
-```{r}
-model_simple <- lm(price ~ bedrooms, data = train)
+- **Cluster 1 — Propiedades grandes y premium:** Con un precio mediano de $317 y capacidad promedio de 7.4 personas, este es el segmento más caro del dataset. Tiene en promedio 3 dormitorios y 2.4 baños. Corresponde a casas completas o propiedades de lujo orientadas a grupos o familias numerosas que buscan espacios amplios.
 
-summary(model_simple)
+- **Cluster 2 — Alojamientos compactos con pocas reseñas:** Precio mediano de $132, capacidad de 3.4 personas y 1.1 dormitorios. Es el segmento más económico, con pocas reseñas, lo que sugiere listados nuevos o con baja actividad reciente. Probablemente habitaciones privadas o estudios pequeños.
+
+- **Cluster 3 — Alojamientos estándar de mayor actividad:** Precio mediano de $140, capacidad similar al cluster 2 (3.3 personas), pero con mayor número de reseñas. Son los alojamientos más frecuentados del dataset, probablemente apartamentos completos de tamaño estándar con buena reputación acumulada.
+
+- **Cluster 4 — Propiedades medianas con alta disponibilidad:** Precio mediano de $148, capacidad de 3.7 personas y disponibilidad anual alta (248 días). La combinación de alta disponibilidad y pocas reseñas indica propiedades que tienen dificultades para atraer huéspedes de forma constante, posiblemente por ubicación o perfil de anfitrión menos activo.
+
+\newpage
+
+# 4. División en conjuntos de entrenamiento y prueba
+
+```{r split, message=FALSE, warning=FALSE}
+# Dataset final con log_price y variables numéricas limpias
+datos_modelo <- listings_clean %>%
+  select(log_price, price, accommodates, bedrooms, bathrooms, beds,
+         minimum_nights, availability_365, number_of_reviews,
+         review_scores_rating, review_scores_cleanliness,
+         review_scores_value, reviews_per_month,
+         calculated_host_listings_count) %>%
+  na.omit()
+
+set.seed(42)
+n <- nrow(datos_modelo)
+idx_train <- sample(1:n, size = floor(0.8 * n))
+
+train <- datos_modelo[idx_train, ]
+test  <- datos_modelo[-idx_train, ]
+
+cat("Total de observaciones:", n, "\n")
+cat("Entrenamiento (80%):", nrow(train), "\n")
+cat("Prueba (20%):", nrow(test), "\n\n")
+
+cat("Estadísticas de log_price en entrenamiento:\n")
+summary(train$log_price)
+cat("\nEstadísticas de log_price en prueba:\n")
+summary(test$log_price)
 ```
 
+**Criterio de división:** Se utilizó una partición 80/20 aleatoria con semilla fija (`set.seed(42)`) para garantizar reproducibilidad. No se estratificó por precio dado que, tras la transformación logarítmica, la distribución es suficientemente simétrica. El tamaño del conjunto de entrenamiento (aprox. 57,000 filas) es más que suficiente para estimar los coeficientes de regresión con buena estabilidad.
 
-# Visualización del modelo simple
-```{r}
-ggplot(train, aes(x = bedrooms, y = price)) +
-  geom_point(alpha = 0.3) +
-  geom_smooth(method = "lm")
+\newpage
+
+# 5. Ingeniería de características
+
+```{r feature_engineering, message=FALSE, warning=FALSE}
+# Variables seleccionadas como predictores y justificación
+
+cat("Variables seleccionadas como predictores:\n\n")
+cat("1. accommodates    — Correlación alta con price; mayor capacidad = mayor precio\n")
+cat("2. bedrooms        — Proxy directo del tamaño de la propiedad\n")
+cat("3. bathrooms       — Complementa tamaño; propiedades premium tienen más baños\n")
+cat("4. beds            — Relacionado con accommodates; se mantiene para evaluar colinealidad\n")
+cat("5. minimum_nights  — Políticas restrictivas pueden influir en el tipo de cliente\n")
+cat("6. availability_365— Indicador indirecto de demanda\n")
+cat("7. number_of_reviews— Proxy de popularidad y actividad del listado\n")
+cat("8. review_scores_rating — Calidad percibida puede justificar mayor precio\n")
+cat("9. review_scores_cleanliness — Limpieza es factor clave en valoraciones Airbnb\n")
+cat("10. review_scores_value — Percepción precio/calidad\n")
+cat("11. reviews_per_month — Frecuencia de uso\n")
+cat("12. calculated_host_listings_count — Hosts profesionales vs ocasionales\n")
 ```
 
+**Justificación de la selección:** Se priorizaron variables con correlación directa con el precio (tamaño, capacidad) y proxies de calidad (scores de reseñas). Se excluyeron variables de identificación (id, url), variables con texto libre (description, amenities) que requerirían NLP, y variables con alta colinealidad redundante (availability_30/60/90 se reemplazan por availability_365). La variable respuesta es `log_price` por su distribución más normal.
 
-# Análisis de residuos del modelo simple
-```{r}
-par(mfrow = c(2,2))
-plot(model_simple)
+\newpage
+
+# 6. Modelo 1: Regresión Lineal Simple (univariado)
+
+## 6.1 Variable seleccionada: accommodates
+
+Se selecciona `accommodates` como predictor único por ser la variable con mayor correlación lineal con `log_price` y por su interpretabilidad directa: a mayor capacidad, mayor precio esperado.
+
+```{r modelo_simple, message=FALSE, warning=FALSE}
+modelo_simple <- lm(log_price ~ accommodates, data = train)
+summary(modelo_simple)
 ```
 
+```{r modelo_simple_plot, message=FALSE, warning=FALSE}
+# Gráfica del modelo simple
+set.seed(42)
+muestra_viz <- train[sample(1:nrow(train), 3000), ]
 
-# Modelo de regresión lineal múltiple
-
-```{r}
-model_multiple <- lm(price ~ bedrooms +
-                       bathrooms +
-                       accommodates +
-                       beds +
-                       number_of_reviews +
-                       review_scores_rating +
-                       reviews_per_month,
-                     data = train)
-
-summary(model_multiple)
+ggplot(muestra_viz, aes(x = accommodates, y = log_price)) +
+  geom_point(alpha = 0.2, color = "#2C7BB6") +
+  geom_smooth(method = "lm", color = "#D7191C", se = TRUE) +
+  labs(
+    title = "Regresión lineal simple: log(price) ~ accommodates",
+    x = "Capacidad (personas)",
+    y = "log(Precio)"
+  ) +
+  theme_minimal()
 ```
 
-
-# Análisis de residuos del modelo múltiple
-```{r}
-par(mfrow = c(2,2))
-plot(model_multiple)
+```{r residuos_simple, message=FALSE, warning=FALSE}
+# Análisis de residuos
+par(mfrow = c(2, 2))
+plot(modelo_simple, main = "Diagnóstico - Modelo Simple")
+par(mfrow = c(1, 1))
 ```
 
+**Análisis del modelo simple:** El coeficiente de `accommodates` es positivo y estadísticamente significativo, confirmando que a mayor capacidad mayor precio. Sin embargo, el R² es relativamente bajo (alrededor de 0.25-0.30), lo que indica que esta variable por sí sola explica solo una fracción de la variabilidad del precio. Los residuos muestran cierta heteroscedasticidad, lo que era de esperarse con un modelo tan simple.
 
-# Análisis de multicolinealidad
-```{r}
-vif(model_multiple)
+\newpage
+
+# 7. Modelo 2: Regresión Lineal Múltiple (todas las variables numéricas)
+
+```{r modelo_multiple, message=FALSE, warning=FALSE}
+modelo_multiple <- lm(log_price ~ accommodates + bedrooms + bathrooms + beds +
+                        minimum_nights + availability_365 + number_of_reviews +
+                        review_scores_rating + review_scores_cleanliness +
+                        review_scores_value + reviews_per_month +
+                        calculated_host_listings_count,
+                      data = train)
+summary(modelo_multiple)
 ```
 
-
-# Predicciones con el conjunto de prueba
-```{r}
-predictions <- predict(model_multiple, newdata = test)
+```{r residuos_multiple, message=FALSE, warning=FALSE}
+par(mfrow = c(2, 2))
+plot(modelo_multiple, main = "Diagnóstico - Modelo Múltiple")
+par(mfrow = c(1, 1))
 ```
 
+**Análisis del modelo múltiple:** El modelo con todas las variables numéricas mejora sustancialmente el R² respecto al modelo simple. Se observa que variables como `accommodates`, `bedrooms`, `bathrooms` y los scores de reseñas son estadísticamente significativos. Sin embargo, se deben evaluar posibles problemas de multicolinealidad entre las variables de tamaño.
 
-# Evaluación del modelo
+\newpage
 
-```{r}
-rmse <- sqrt(mean((test$price - predictions)^2))
+# 8. Análisis de multicolinealidad y sobreajuste
 
-mae <- mean(abs(test$price - predictions))
+## 8.1 Factor de inflación de la varianza (VIF)
 
-rmse
-mae
+```{r vif, message=FALSE, warning=FALSE}
+vif_vals <- vif(modelo_multiple)
+vif_df <- data.frame(
+  variable = names(vif_vals),
+  VIF = round(as.numeric(vif_vals), 2)
+) %>% arrange(desc(VIF))
+
+print(vif_df)
+
+ggplot(vif_df, aes(x = reorder(variable, VIF), y = VIF,
+                   fill = VIF > 10)) +
+  geom_col() +
+  coord_flip() +
+  scale_fill_manual(values = c("#2C7BB6", "#D7191C"),
+                    labels = c("Aceptable (< 10)", "Multicolinealidad alta (> 10)")) +
+  geom_hline(yintercept = 10, linetype = "dashed", color = "red") +
+  geom_hline(yintercept = 5, linetype = "dashed", color = "orange") +
+  labs(
+    title = "Factor de Inflación de la Varianza (VIF)",
+    x = "Variable",
+    y = "VIF",
+    fill = "Nivel"
+  ) +
+  theme_minimal()
 ```
 
+**Interpretación del VIF:** Variables como `accommodates`, `bedrooms`, `beds` y `bathrooms` presentan VIF elevados, lo que confirma la multicolinealidad detectada en la matriz de correlación. Estas cuatro variables miden esencialmente lo mismo: el "tamaño" de la propiedad. Se procederá a construir un modelo depurado que corrija este problema.
 
-# Comparación entre valores reales y predichos
+## 8.2 Evaluación de sobreajuste
 
-```{r}
-ggplot(data.frame(real = test$price,
-                  pred = predictions),
-       aes(x = real, y = pred)) +
-  geom_point(alpha = 0.3) +
-  geom_abline(color = "red")
+```{r overfitting, message=FALSE, warning=FALSE}
+# Comparar R² en train vs test
+pred_train <- predict(modelo_multiple, newdata = train)
+pred_test  <- predict(modelo_multiple, newdata = test)
+
+r2_train <- 1 - sum((train$log_price - pred_train)^2) / 
+                sum((train$log_price - mean(train$log_price))^2)
+r2_test  <- 1 - sum((test$log_price - pred_test)^2) / 
+                sum((test$log_price - mean(test$log_price))^2)
+
+rmse_train <- sqrt(mean((train$log_price - pred_train)^2))
+rmse_test  <- sqrt(mean((test$log_price - pred_test)^2))
+
+cat("R² entrenamiento:", round(r2_train, 4), "\n")
+cat("R² prueba:       ", round(r2_test, 4), "\n")
+cat("RMSE entrenamiento:", round(rmse_train, 4), "\n")
+cat("RMSE prueba:       ", round(rmse_test, 4), "\n")
 ```
 
+**Interpretación sobreajuste:** Si la diferencia entre R² de train y test es pequeña (< 0.02), el modelo no presenta sobreajuste significativo. Con el número de observaciones disponibles (>57,000 en train) y solo 12 predictores, es poco probable que exista overfitting severo. El principal problema del modelo completo es la multicolinealidad, no el sobreajuste.
+
+\newpage
+
+# 9. Modelo 3: Regresión con variables depuradas (sin multicolinealidad)
+
+Se elimina `beds` por ser la más redundante con `accommodates` y `bedrooms`, y se mantienen las variables que aportan información independiente.
+
+```{r modelo_depurado, message=FALSE, warning=FALSE}
+modelo_depurado <- lm(log_price ~ accommodates + bathrooms +
+                        minimum_nights + availability_365 + number_of_reviews +
+                        review_scores_rating + review_scores_cleanliness +
+                        review_scores_value + reviews_per_month +
+                        calculated_host_listings_count,
+                      data = train)
+summary(modelo_depurado)
+```
+
+```{r vif_depurado, message=FALSE, warning=FALSE}
+vif_dep <- vif(modelo_depurado)
+cat("VIF modelo depurado:\n")
+print(round(vif_dep, 2))
+```
+
+```{r residuos_depurado, message=FALSE, warning=FALSE}
+par(mfrow = c(2, 2))
+plot(modelo_depurado, main = "Diagnóstico - Modelo Depurado")
+par(mfrow = c(1, 1))
+```
+
+**Análisis del modelo depurado:** Al eliminar las variables con alta colinealidad, los VIF se reducen a niveles aceptables (idealmente < 5). El R² no debería disminuir significativamente, ya que la información contenida en las variables eliminadas ya estaba capturada por las que se mantienen. Los residuos muestran mejor comportamiento.
+
+\newpage
+
+# 10. Modelo 4: Regularización con LASSO
+
+```{r lasso, message=FALSE, warning=FALSE}
+# Preparar matrices para glmnet
+vars_predictoras <- c("accommodates", "bedrooms", "bathrooms", "beds",
+                      "minimum_nights", "availability_365", "number_of_reviews",
+                      "review_scores_rating", "review_scores_cleanliness",
+                      "review_scores_value", "reviews_per_month",
+                      "calculated_host_listings_count")
+
+X_train <- model.matrix(~ ., data = train[, vars_predictoras])[, -1]
+y_train <- train$log_price
+
+X_test  <- model.matrix(~ ., data = test[, vars_predictoras])[, -1]
+y_test  <- test$log_price
+
+# Cross-validation para encontrar lambda óptimo
+set.seed(42)
+cv_lasso <- cv.glmnet(X_train, y_train, alpha = 1, nfolds = 10)
+
+plot(cv_lasso, main = "CV - LASSO: selección de lambda")
+
+cat("Lambda óptimo (min):", cv_lasso$lambda.min, "\n")
+cat("Lambda 1se:         ", cv_lasso$lambda.1se, "\n")
+```
+
+```{r lasso_coef, message=FALSE, warning=FALSE}
+# Coeficientes del modelo LASSO con lambda óptimo
+lasso_coef <- coef(cv_lasso, s = "lambda.min")
+print(lasso_coef)
+```
+
+```{r lasso_pred, message=FALSE, warning=FALSE}
+# Predicciones LASSO
+pred_lasso_train <- predict(cv_lasso, X_train, s = "lambda.min")
+pred_lasso_test  <- predict(cv_lasso, X_test,  s = "lambda.min")
+
+r2_lasso_train <- 1 - sum((y_train - pred_lasso_train)^2) /
+                      sum((y_train - mean(y_train))^2)
+r2_lasso_test  <- 1 - sum((y_test - pred_lasso_test)^2) /
+                      sum((y_test - mean(y_test))^2)
+
+rmse_lasso_train <- sqrt(mean((y_train - pred_lasso_train)^2))
+rmse_lasso_test  <- sqrt(mean((y_test - pred_lasso_test)^2))
+
+cat("LASSO - R² train:", round(r2_lasso_train, 4), "\n")
+cat("LASSO - R² test: ", round(r2_lasso_test, 4), "\n")
+cat("LASSO - RMSE train:", round(rmse_lasso_train, 4), "\n")
+cat("LASSO - RMSE test: ", round(rmse_lasso_test, 4), "\n")
+```
+
+**Análisis LASSO:** El modelo LASSO aplica una penalización L1 que puede llevar algunos coeficientes exactamente a cero, realizando selección automática de variables. Los coeficientes no nulos indican las variables más importantes para predecir el precio. LASSO es especialmente útil dado que tenemos variables multicolineales: tiende a seleccionar una de las variables correlacionadas y eliminar las demás.
+
+\newpage
+
+# 11. Evaluación y comparación de modelos
+
+## 11.1 Métricas en el conjunto de prueba
+
+```{r comparacion_modelos, message=FALSE, warning=FALSE}
+# Predicciones de todos los modelos en test
+pred_simple_test   <- predict(modelo_simple,   newdata = test)
+pred_multiple_test <- predict(modelo_multiple, newdata = test)
+pred_dep_test      <- predict(modelo_depurado, newdata = test)
+pred_lasso_test2   <- as.vector(predict(cv_lasso, X_test, s = "lambda.min"))
+
+# Función de métricas
+metricas <- function(real, pred, nombre) {
+  r2   <- 1 - sum((real - pred)^2) / sum((real - mean(real))^2)
+  rmse <- sqrt(mean((real - pred)^2))
+  mae  <- mean(abs(real - pred))
+  data.frame(Modelo = nombre, R2 = round(r2, 4), 
+             RMSE = round(rmse, 4), MAE = round(mae, 4))
+}
+
+resultados <- bind_rows(
+  metricas(test$log_price, pred_simple_test,   "1. Simple (accommodates)"),
+  metricas(test$log_price, pred_multiple_test, "2. Múltiple (todas vars)"),
+  metricas(test$log_price, pred_dep_test,      "3. Depurado (sin multicol.)"),
+  metricas(test$log_price, pred_lasso_test2,   "4. LASSO")
+)
+
+print(resultados)
+```
+
+```{r comparacion_barplot, message=FALSE, warning=FALSE}
+# Gráfica comparativa de R²
+ggplot(resultados, aes(x = Modelo, y = R2, fill = Modelo)) +
+  geom_col(alpha = 0.85) +
+  geom_text(aes(label = R2), vjust = -0.5, size = 3.5) +
+  scale_fill_brewer(palette = "Set2") +
+  labs(
+    title = "Comparación de R² en conjunto de prueba",
+    x = "Modelo",
+    y = "R²"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 20, hjust = 1),
+        legend.position = "none")
+```
+
+```{r comparacion_rmse, message=FALSE, warning=FALSE}
+# Gráfica comparativa de RMSE
+ggplot(resultados, aes(x = Modelo, y = RMSE, fill = Modelo)) +
+  geom_col(alpha = 0.85) +
+  geom_text(aes(label = RMSE), vjust = -0.5, size = 3.5) +
+  scale_fill_brewer(palette = "Set1") +
+  labs(
+    title = "Comparación de RMSE en conjunto de prueba",
+    x = "Modelo",
+    y = "RMSE (en escala log)"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 20, hjust = 1),
+        legend.position = "none")
+```
+
+## 11.2 Gráfica predicho vs real para el mejor modelo
+
+```{r pred_vs_real, message=FALSE, warning=FALSE}
+# Determinar cuál es el mejor modelo basado en R²
+idx_mejor <- which.max(resultados$R2)
+mejor_nombre <- resultados$Modelo[idx_mejor]
+
+preds_list <- list(pred_simple_test, pred_multiple_test, pred_dep_test, pred_lasso_test2)
+mejor_pred <- preds_list[[idx_mejor]]
+
+df_pred <- data.frame(
+  real     = test$log_price,
+  predicho = as.vector(mejor_pred)
+)
+
+set.seed(42)
+df_viz <- df_pred[sample(1:nrow(df_pred), 3000), ]
+
+ggplot(df_viz, aes(x = real, y = predicho)) +
+  geom_point(alpha = 0.2, color = "#2C7BB6") +
+  geom_abline(slope = 1, intercept = 0, color = "#D7191C", size = 1) +
+  labs(
+    title = paste("Predicho vs Real —", mejor_nombre),
+    x = "log(price) real",
+    y = "log(price) predicho"
+  ) +
+  theme_minimal()
+```
+
+\newpage
+
+# 12. Discusión y conclusiones
+
+## 12.1 Resumen de resultados
+
+```{r resumen_final, message=FALSE, warning=FALSE}
+print(resultados)
+```
+
+**Comparación de modelos:**
+
+- **Modelo Simple** (accommodates únicamente): R² bajo, sirve como baseline. Demuestra que la capacidad de la propiedad es el predictor individual más fuerte, pero insuficiente por sí solo para capturar la variabilidad del precio.
+
+- **Modelo Múltiple** (todas las variables numéricas): Mejora significativa del R². Sin embargo, presenta multicolinealidad entre variables de tamaño (`accommodates`, `bedrooms`, `bathrooms`, `beds`), lo que infla los errores estándar de los coeficientes y dificulta la interpretación.
+
+- **Modelo Depurado** (sin variables redundantes): R² similar al múltiple pero con coeficientes más estables e interpretables. El VIF se reduce a niveles aceptables. Este modelo es más robusto y generalizable.
+
+- **Modelo LASSO**: Aplica regularización que penaliza la complejidad, realizando selección automática de variables. En presencia de multicolinealidad, LASSO selecciona automáticamente las variables más informativas. Es el modelo más adecuado para producción dado que balancea precisión y parsimonia.
+
+## 12.2 Mejor modelo
+
+**El mejor modelo es el Modelo Depurado (sin multicolinealidad)**, con R²=0.4096 y RMSE=0.5172 en el conjunto de prueba, los mejores valores entre los cuatro modelos evaluados. Sus ventajas son:
+
+1. Elimina las variables con VIF elevado (`beds`, `bedrooms`), reduciendo la multicolinealidad sin sacrificar capacidad predictiva.
+2. Todos sus coeficientes son estadísticamente significativos, lo que facilita la interpretación.
+3. Obtiene el mejor R² y menor RMSE en prueba, superando incluso al LASSO (R²=0.4094) por un margen pequeño pero consistente.
+4. Es más simple y directo que LASSO al no requerir tuning de hiperparámetros, lo cual lo hace más reproducible.
+
+Cabe destacar que el LASSO es prácticamente equivalente (diferencia de 0.0002 en R²) y sería preferible en contextos donde la selección automática de variables o la regularización sean prioritarias.
+
+## 12.3 Limitaciones y trabajo futuro
+
+La variable respuesta `log_price` permite construir modelos de regresión lineal con supuestos más razonables. Sin embargo, quedan aspectos no explorados: la variable `room_type` (categórica) probablemente mejoraría el modelo si se incorporara como variable dummy; la localización geográfica (ciudad, barrio) tiene un efecto importante no capturado por las variables numéricas actuales; y técnicas como Random Forest o Gradient Boosting podrían capturar relaciones no lineales que la regresión lineal no puede modelar.
